@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hansefraktion Rostock | Vernünftig. Sozial. Verantwortungsbewusst.</title>
+    
+    <!-- Skripte & Stile -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&family=Playfair+Display:wght@700&display=swap');
+        body { font-family: 'Montserrat', sans-serif; scroll-behavior: smooth; }
+        .font-serif { font-family: 'Playfair Display', serif; }
+        
+        /* Maritime Optik */
+        .hero-gradient {
+            background: linear-gradient(rgba(0, 40, 85, 0.85), rgba(0, 40, 85, 0.7)), 
+                        url('https://images.unsplash.com/photo-1590424068834-367749830573?auto=format&fit=crop&q=80&w=1920');
+            background-size: cover;
+            background-position: center;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e33e2b; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-white">
+    <div id="root"></div>
+
+    <!-- Firebase SDKs (Compat Version) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <script type="text/babel">
+        // --- Firebase Konfiguration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAEghhEnt5w5JZ_Hc7fvncpccpEmCJp7VY",
+            authDomain: "hansefraktion-rostock.firebaseapp.com",
+            projectId: "hansefraktion-rostock",
+            storageBucket: "hansefraktion-rostock.firebasestorage.app",
+            messagingSenderId: "643118351967",
+            appId: "1:643118351967:web:bcb6ff6b0f3f1dc9e3bdea",
+            measurementId: "G-6E8VF8YESX"
+        };
+
+        // Initialisierung
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = "hansefraktion-rostock";
+
+        const App = () => {
+            const [view, setView] = React.useState('home'); 
+            const [user, setUser] = React.useState(null);
+            const [news, setNews] = React.useState([]);
+            const [contacts, setContacts] = React.useState([]);
+            const [loading, setLoading] = React.useState(true);
+            const [activeSke, setActiveSke] = React.useState(null);
+
+            // Formular Zustände
+            const [newsTitle, setNewsTitle] = React.useState('');
+            const [newsContent, setNewsContent] = React.useState('');
+            const [newsCategory, setNewsCategory] = React.useState('Presse');
+            
+            const [contactName, setContactName] = React.useState('');
+            const [contactMail, setContactMail] = React.useState('');
+            const [contactMsg, setContactMsg] = React.useState('');
+
+            // Authentifizierung mit Fallback bei Token-Fehlern
+            React.useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            try {
+                                await auth.signInWithCustomToken(__initial_auth_token);
+                            } catch (tokenErr) {
+                                console.warn("Sicherheitstoken ungültig für dieses Projekt, wechsle zu Gast-Modus.");
+                                await auth.signInAnonymously();
+                            }
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (err) {
+                        console.error("Anmeldefehler:", err);
+                    }
+                };
+
+                initAuth();
+
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+                    setUser(currentUser);
+                    setLoading(false);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Echtzeit-Daten Abfrage
+            React.useEffect(() => {
+                if (!user) return;
+                
+                const newsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news');
+                const contactsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('contacts');
+
+                const unsubNews = newsRef.onSnapshot((snap) => {
+                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setNews(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+                }, (err) => console.error("Firestore News Fehler:", err));
+
+                const unsubContacts = contactsRef.onSnapshot((snap) => {
+                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setContacts(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+                }, (err) => console.error("Firestore Kontakt Fehler:", err));
+
+                return () => { unsubNews(); unsubContacts(); };
+            }, [user]);
+
+            const handleAddNews = async (e) => {
+                e.preventDefault();
+                if (!newsTitle || !newsContent) return;
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news').add({
+                        title: newsTitle,
+                        content: newsContent,
+                        category: newsCategory,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setNewsTitle(''); setNewsContent('');
+                } catch (err) {
+                    console.error("News speichern fehlgeschlagen:", err);
+                }
+            };
+
+            const handleContactSubmit = async (e) => {
+                e.preventDefault();
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('contacts').add({
+                        name: contactName,
+                        email: contactMail,
+                        message: contactMsg,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setContactName(''); setContactMail(''); setContactMsg('');
+                    alert("Nachricht erfolgreich an die Fraktion gesendet!");
+                } catch (err) {
+                    console.error("Kontakt senden fehlgeschlagen:", err);
+                }
+            };
+
+            const handleDelete = async (col, id) => {
+                if (!user) return;
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(col).doc(id).delete();
+                } catch (err) {
+                    console.error("Löschen fehlgeschlagen:", err);
+                }
+            };
+
+            if (loading) return (
+                <div className="h-screen flex items-center justify-center bg-[#002855]">
+                    <div className="text-center">
+                        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-[#e33e2b] mx-auto mb-4"></div>
+                        <p className="text-white font-bold tracking-widest uppercase text-xs">Hansefraktion Rostock lädt...</p>
+                    </div>
+                </div>
+            );
+
+            const Navigation = () => (
+                <nav className="fixed w-full z-50 bg-white shadow-lg border-b-4 border-[#e33e2b]">
+                    <div className="max-w-7xl mx-auto px-4 h-24 flex justify-between items-center">
+                        <div className="flex items-center cursor-pointer" onClick={() => setView('home')}>
+                            <img src="Fraktionslogo fertig.png" alt="Logo" className="h-16 w-auto mr-4" onError={(e) => e.target.style.display='none'} />
+                            <div className="flex flex-col">
+                                <span className="text-[#0056b3] font-bold text-xl uppercase font-serif tracking-tighter leading-none">Hansefraktion</span>
+                                <span className="text-[#e33e2b] font-bold text-lg uppercase font-serif tracking-widest text-sm">Rostock</span>
+                            </div>
+                        </div>
+                        <div className="hidden md:flex space-x-6 font-semibold text-[10px] uppercase tracking-[0.2em]">
+                            <button onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors">Start</button>
+                            <a href="#ueber-uns" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2">Über Uns</a>
+                            <a href="#fraktion" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2 text-center">Fraktion</a>
+                            <a href="#news" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2">News</a>
+                            <button onClick={() => setView('admin')} className={`px-4 py-2 rounded-full border transition-all ${view === 'admin' ? 'bg-[#e33e2b] text-white border-[#e33e2b]' : 'text-gray-400 border-gray-200'}`}>Intern</button>
+                        </div>
+                    </div>
+                </nav>
+            );
+
+            const HomeView = () => (
+                <div className="animate-in fade-in duration-500">
+                    {/* Hero */}
+                    <section className="h-[90vh] hero-gradient flex items-center justify-center text-white text-center px-4">
+                        <div className="max-w-5xl">
+                            <h1 className="text-4xl md:text-8xl font-bold font-serif mb-8 leading-tight italic">Vernünftig. Sozial.<br/>Verantwortungsbewusst.</h1>
+                            <p className="text-lg md:text-2xl font-light text-blue-100 max-w-3xl mx-auto leading-relaxed">Pragmatische Politik für unsere Hansestadt Rostock.</p>
+                            <div className="mt-12 flex flex-col sm:flex-row justify-center gap-6">
+                                <a href="#ziele" className="bg-[#e33e2b] hover:bg-red-700 text-white px-10 py-5 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-sm">Themen</a>
+                                <a href="#fraktion" className="bg-white hover:bg-gray-100 text-[#0056b3] px-10 py-5 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-sm">Fraktion</a>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Über Uns */}
+                    <section id="ueber-uns" className="py-24 bg-white px-4">
+                        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-20 items-center">
+                            <div className="space-y-6 text-left">
+                                <h3 className="text-3xl font-serif font-bold text-[#0056b3]">Unsere Identität</h3>
+                                <p className="text-gray-700 leading-relaxed text-lg">
+                                    Die Hansefraktion Rostock steht für eine pragmatische Kommunalpolitik, die sich an den realen Lebensbedingungen der Menschen orientiert. 
+                                    Wir setzen auf konkrete Verbesserungen im Alltag statt auf ideologische Symbolpolitik.
+                                </p>
+                                <div className="pl-6 border-l-4 border-[#e33e2b] italic text-gray-600 bg-gray-50 p-6 rounded-r-2xl">
+                                    "Wir treffen Entscheidungen für Rostock – sachorientiert und bürgernah."
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="p-8 bg-gray-50 rounded-3xl border border-gray-100 text-center">
+                                    <span className="block text-4xl font-bold text-[#0056b3] mb-2">4</span>
+                                    <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Abgeordnete</span>
+                                </div>
+                                <div className="p-8 bg-gray-50 rounded-3xl border border-gray-100 text-center">
+                                    <span className="block text-4xl font-bold text-[#e33e2b]">100%</span>
+                                    <span className="text-[10px] uppercase font-bold text-gray-400 tracking-widest">Rostock</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Fraktion & SKE */}
+                    <section id="fraktion" className="py-24 bg-gray-50 px-4">
+                        <div className="max-w-7xl mx-auto">
+                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] text-center mb-16 italic">Ihre Köpfe in der Bürgerschaft</h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-20">
+                                {[
+                                    { n: 'Lajos Orban', r: 'Fraktionsvorsitzender', img: 'lajos_orban.jpg' },
+                                    { n: 'Tillmann Anselm Lamberg', r: 'Stellv. Vorsitzender', img: 'tillmann_lamberg.jpg' },
+                                    { n: 'Nils Rosengart', r: 'Fraktionsmitglied', img: 'nils_rosengart.jpg' },
+                                    { n: 'Sven Sydow', r: 'Geschäftsführer', img: 'sven_sydow.jpg' }
+                                ].map((m, i) => (
+                                    <div key={i} className="bg-white p-6 rounded-3xl shadow-sm text-center group hover:shadow-xl transition-all">
+                                        <div className="h-72 bg-gray-200 rounded-2xl mb-4 overflow-hidden relative grayscale group-hover:grayscale-0 transition-all duration-500">
+                                            <img 
+                                                src={m.img} 
+                                                className="w-full h-full object-cover" 
+                                                alt={m.n} 
+                                                onError={(e) => { e.target.src = `https://via.placeholder.com/400x600?text=${m.n}`; }}
+                                            />
+                                        </div>
+                                        <h4 className="font-bold text-[#0056b3] text-lg">{m.n}</h4>
+                                        <p className="text-[10px] text-[#e33e2b] font-bold uppercase tracking-widest mt-2">{m.r}</p>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="max-w-3xl mx-auto" id="experten">
+                                <h3 className="text-center font-bold text-gray-400 uppercase tracking-[0.3em] mb-10 text-xs">Expertise in den Ausschüssen</h3>
+                                <div className="space-y-3">
+                                    {['Bau- & Planungsausschuss', 'Wirtschafts- & Hafenausschuss', 'Finanz- & Vergabeausschuss', 'Soziales, Gesundheit & Inklusion'].map((title, i) => (
+                                        <div key={i} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                                            <button onClick={() => setActiveSke(activeSke === i ? null : i)} className="w-full p-6 flex justify-between items-center font-bold text-[#0056b3] hover:bg-gray-50">
+                                                {title} <i className={`fa-solid fa-chevron-down text-[#e33e2b] transition-transform ${activeSke === i ? 'rotate-180' : ''}`}></i>
+                                            </button>
+                                            {activeSke === i && (
+                                                <div className="p-8 bg-gray-50 border-t grid grid-cols-1 md:grid-cols-2 gap-4 text-sm animate-in slide-in-from-top-2 duration-300">
+                                                    <div className="flex items-center p-3 bg-white rounded-xl shadow-sm text-left"><i className="fa-solid fa-user-check mr-3 text-[#e33e2b]"></i> Sachkundiger Einwohner</div>
+                                                    <div className="flex items-center p-3 bg-white rounded-xl shadow-sm text-gray-400 italic text-left"><i className="fa-solid fa-user-clock mr-3"></i> Stellvertreter</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Themen */}
+                    <section id="ziele" className="py-24 bg-[#0056b3] text-white px-4">
+                        <div className="max-w-7xl mx-auto">
+                            <h2 className="text-3xl font-serif font-bold text-center mb-16 italic">Zukunft für Rostock gestalten</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-center text-left">
+                                <div className="p-10 bg-white/5 rounded-3xl border border-white/10 hover:bg-white/10 transition-all">
+                                    <i className="fa-solid fa-industry text-4xl text-[#e33e2b] mb-6"></i>
+                                    <h3 className="text-xl font-bold mb-4 uppercase tracking-widest leading-tight">Wirtschaft & Arbeit</h3>
+                                    <p className="text-sm text-blue-100 leading-relaxed">Sicherung von Industriearbeitsplätzen (EEW) und moderner Infrastruktur wie die Tram West.</p>
+                                </div>
+                                <div className="p-10 bg-white/5 rounded-3xl border border-white/10 hover:bg-white/10 transition-all">
+                                    <i className="fa-solid fa-coins text-4xl text-[#e33e2b] mb-6"></i>
+                                    <h3 className="text-xl font-bold mb-4 uppercase tracking-widest leading-tight">Solide Finanzen</h3>
+                                    <p className="text-sm text-blue-100 leading-relaxed">Stopp von Steuererhöhungen (Plastik/Zweitwohnsitz). Rostock muss ein Ankerplatz für Familien bleiben.</p>
+                                </div>
+                                <div className="p-10 bg-white/5 rounded-3xl border border-white/10 hover:bg-white/10 transition-all">
+                                    <i className="fa-solid fa-hand-holding-heart text-4xl text-[#e33e2b] mb-6"></i>
+                                    <h3 className="text-xl font-bold mb-4 uppercase tracking-widest leading-tight">Soziales & Inklusion</h3>
+                                    <p className="text-sm text-blue-100 leading-relaxed">Wir stärken die Teilhabe von Menschen mit Behinderungen durch gezielte parlamentarische Initiativen.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* News Feed */}
+                    <section id="news" className="py-24 bg-white px-4">
+                        <div className="max-w-7xl mx-auto text-left">
+                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] mb-12 italic">Aktuelles aus der Fraktion</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                                {news.map(n => (
+                                    <div key={n.id} className="bg-gray-50 p-10 rounded-3xl border-l-8 border-[#e33e2b] shadow-sm hover:shadow-xl transition-all">
+                                        <span className="text-[10px] font-bold text-[#e33e2b] uppercase tracking-widest">{n.category || 'Information'}</span>
+                                        <h3 className="text-xl font-bold my-4 text-[#0056b3] leading-tight">{n.title}</h3>
+                                        <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap line-clamp-6">{n.content}</p>
+                                    </div>
+                                ))}
+                                {news.length === 0 && <div className="col-span-3 py-20 text-center text-gray-300 italic tracking-widest">Bisher wurden keine Nachrichten veröffentlicht.</div>}
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Kontaktformular */}
+                    <section id="kontakt" className="py-24 bg-gray-50 px-4">
+                        <div className="max-w-4xl mx-auto bg-white p-12 rounded-[3rem] shadow-2xl">
+                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] text-center mb-12 italic">Nachricht an uns</h2>
+                            <form onSubmit={handleContactSubmit} className="grid gap-6 text-left">
+                                <div className="grid md:grid-cols-2 gap-6">
+                                    <input type="text" placeholder="Vorname & Name" className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactName} onChange={e => setContactName(e.target.value)} required />
+                                    <input type="email" placeholder="E-Mail Adresse" className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactMail} onChange={e => setContactMail(e.target.value)} required />
+                                </div>
+                                <textarea rows="5" placeholder="Ihre Frage oder Ihr Anliegen..." className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactMsg} onChange={e => setContactMsg(e.target.value)} required></textarea>
+                                <button className="bg-[#e33e2b] text-white py-5 rounded-2xl font-bold uppercase tracking-widest shadow-xl hover:bg-red-700 transition-all active:scale-95">Absenden</button>
+                            </form>
+                        </div>
+                    </section>
+                </div>
+            );
+
+            const AdminView = () => (
+                <div className="pt-40 pb-24 max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 text-left">
+                    <div className="bg-white p-10 rounded-3xl shadow-sm border border-gray-100">
+                        <h3 className="font-bold text-xl mb-8 text-[#0056b3] flex items-center">
+                            <i className="fa-solid fa-pen-nib mr-3"></i> News schreiben
+                        </h3>
+                        <form onSubmit={handleAddNews} className="space-y-4">
+                            <input type="text" placeholder="Titel" className="w-full p-4 bg-gray-50 border rounded-xl outline-none" value={newsTitle} onChange={e => setNewsTitle(e.target.value)} />
+                            <textarea rows="8" placeholder="Inhalt der Nachricht..." className="w-full p-4 bg-gray-50 border rounded-xl outline-none" value={newsContent} onChange={e => setNewsContent(e.target.value)}></textarea>
+                            <button className="w-full bg-[#0056b3] text-white py-5 rounded-xl font-bold uppercase tracking-widest hover:bg-[#002855]">Nachricht speichern</button>
+                        </form>
+                    </div>
+                    <div className="bg-white p-10 rounded-3xl shadow-sm border border-gray-100">
+                        <h3 className="font-bold text-xl mb-8 text-[#e33e2b] flex items-center">
+                            <i className="fa-solid fa-envelope-open-text mr-3"></i> Bürgeranfragen
+                        </h3>
+                        <div className="space-y-4 max-h-[650px] overflow-y-auto pr-2 custom-scrollbar">
+                            {contacts.map(c => (
+                                <div key={c.id} className="p-6 bg-gray-50 rounded-2xl border relative group hover:border-[#e33e2b] transition-all">
+                                    <button onClick={() => handleDelete('contacts', c.id)} className="absolute top-4 right-4 text-gray-300 hover:text-red-500 transition-colors">
+                                        <i className="fa-solid fa-trash-can"></i>
+                                    </button>
+                                    <div className="font-bold text-[#0056b3] mb-1 text-sm">{c.name}</div>
+                                    <div className="text-[10px] text-gray-400 mb-4 uppercase tracking-widest">{c.email}</div>
+                                    <p className="text-xs text-gray-600 italic leading-relaxed bg-white p-3 rounded-lg border border-gray-100">"{c.message}"</p>
+                                </div>
+                            ))}
+                            {contacts.length === 0 && <div className="text-center py-12 text-gray-300 italic">Keine aktuellen Anfragen vorhanden.</div>}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const Impressum = () => (
+                <div className="pt-40 pb-24 max-w-4xl mx-auto px-4 font-serif text-left">
+                    <h1 className="text-4xl font-bold text-[#0056b3] mb-8 italic">Impressum</h1>
+                    <div className="space-y-6 text-gray-700 font-sans leading-relaxed">
+                        <p><strong>Hansefraktion Rostock</strong><br/>Neuer Markt 1, 18055 Rostock</p>
+                        <p><strong>Vertreten durch:</strong><br/>Lajos Orban (Fraktionsvorsitzender)</p>
+                        <p><strong>Kontakt:</strong><br/>Telefon: 0381 / 381 - 1234<br/>E-Mail: info@hansefraktion-rostock.de</p>
+                    </div>
+                    <button onClick={() => setView('home')} className="mt-12 text-[#e33e2b] font-bold underline uppercase tracking-widest text-xs">Zurück zur Startseite</button>
+                </div>
+            );
+
+            const Datenschutz = () => (
+                <div className="pt-40 pb-24 max-w-4xl mx-auto px-4 font-serif text-left">
+                    <h1 className="text-4xl font-bold text-[#0056b3] mb-8 italic">Datenschutzerklärung</h1>
+                    <div className="space-y-6 text-gray-700 font-sans leading-relaxed text-sm">
+                        <h2 className="font-bold text-[#e33e2b] uppercase tracking-widest text-xs mb-2">Datenschutz auf einen Blick</h2>
+                        <p>Wir behandeln Ihre personenbezogenen Daten vertraulich und entsprechend der gesetzlichen Datenschutzvorschriften sowie dieser Datenschutzerklärung.</p>
+                        <p>Wenn Sie unser Kontaktformular nutzen, werden Ihre Angaben (Name, E-Mail, Inhalt) ausschließlich zur Bearbeitung Ihres Anliegens in unserer gesicherten Firebase-Datenbank gespeichert und nicht an Dritte weitergegeben.</p>
+                    </div>
+                    <button onClick={() => setView('home')} className="mt-12 text-[#e33e2b] font-bold underline uppercase tracking-widest text-xs">Zurück zur Startseite</button>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen">
+                    <Navigation />
+                    {view === 'home' && <HomeView />}
+                    {view === 'admin' && <AdminView />}
+                    {view === 'impressum' && <Impressum />}
+                    {view === 'datenschutz' && <Datenschutz />}
+
+                    <footer className="bg-gray-900 text-gray-500 py-20 text-center border-t border-gray-800">
+                        <div className="max-w-7xl mx-auto px-4">
+                            <div className="flex justify-center gap-10 text-[10px] font-bold uppercase tracking-[0.3em] mb-12">
+                                <button onClick={() => setView('impressum')} className="hover:text-white transition-colors">Impressum</button>
+                                <button onClick={() => setView('datenschutz')} className="hover:text-white transition-colors">Datenschutz</button>
+                                <button onClick={() => setView('admin')} className="hover:text-white transition-colors">Verwaltung (Intern)</button>
+                            </div>
+                            <p className="opacity-40 italic tracking-widest text-[8px] uppercase">Hansefraktion Rostock © 2024 | Vernünftig. Sozial. Verantwortungsbewusst.</p>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
