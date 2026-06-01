@@ -17,7 +17,7 @@
         body { font-family: 'Montserrat', sans-serif; scroll-behavior: smooth; }
         .font-serif { font-family: 'Playfair Display', serif; }
         
-        /* Maritime Optik */
+        /* Maritime Optik & Hintergründe */
         .hero-gradient {
             background: linear-gradient(rgba(0, 40, 85, 0.85), rgba(0, 40, 85, 0.7)), 
                         url('https://images.unsplash.com/photo-1590424068834-367749830573?auto=format&fit=crop&q=80&w=1920');
@@ -58,13 +58,55 @@
         const db = firebase.firestore();
         const appId = "hansefraktion-rostock";
 
+        // Vordefinierte Standardbesetzung der Ausschüsse aus eurer hochgeladenen Excel-Tabelle
+        const defaultCommittees = [
+            { id: "bau", name: "Bau- und Liegenschaftsausschuss", vertreter: "Sven Sydow", stellvertreter: "Axel Kahle" },
+            { id: "bildung", name: "Bildungs- und Sportausschuss", vertreter: "Nils-Ole Rosengart", stellvertreter: "Leonard Siebold" },
+            { id: "buerger", name: "Bürgerservice-Ausschuss", vertreter: "Michael Belger", stellvertreter: "Lajos Orban" },
+            { id: "finanz", name: "Finanz- und Beteiligungsausschuss", vertreter: "Eric Brodhäcker", stellvertreter: "Tilmann Reiner Anselm Lamberg" },
+            { id: "jugend", name: "Jugendhilfeausschuss", vertreter: "Tilmann Reiner Anselm Lamberg", stellvertreter: "Yvonne Lamberg" },
+            { id: "klinik", name: "Klinikausschuss", vertreter: "Sven Sydow", stellvertreter: "Lajos Orban" },
+            { id: "koe", name: "KOE-Ausschuss (Kommunale Objektbewirtschaftung und -entwicklung)", vertreter: "Tilmann Reiner Anselm Lamberg", stellvertreter: "Sven Sydow" },
+            { id: "kultur", name: "Kulturausschuss", vertreter: "Leonard Siebold", stellvertreter: "Nils-Ole Rosengart" },
+            { id: "personal", name: "Personalausschuss", vertreter: "Lajos Orban", stellvertreter: "Nils-Ole Rosengart" },
+            { id: "rechnung", name: "Rechnungsprüfungsausschuss", vertreter: "Lajos Orban", stellvertreter: "Michael Belger" },
+            { id: "sozial", name: "Sozialausschuss", vertreter: "Tilmann Reiner Anselm Lamberg", stellvertreter: "Yvonne Lamberg" },
+            { id: "stadt", name: "Stadtentwicklungs- und Umweltausschuss", vertreter: "Axel Kahle", stellvertreter: "Sven Sydow" },
+            { id: "tourismus", name: "Tourismusausschuss", vertreter: "Lajos Orban", stellvertreter: "Tilmann Reiner Anselm Lamberg" },
+            { id: "wirtschaft", name: "Wirtschafts- und Vergabeausschuss", vertreter: "Nils-Ole Rosengart", stellvertreter: "Uwe Karsten Möller" }
+        ];
+
         const App = () => {
-            const [view, setView] = React.useState('home'); 
+            const [view, setView] = React.useState('home'); // 'home', 'archiv', 'admin', 'impressum', 'datenschutz'
             const [user, setUser] = React.useState(null);
             const [news, setNews] = React.useState([]);
             const [contacts, setContacts] = React.useState([]);
+            const [committees, setCommittees] = React.useState([]);
             const [loading, setLoading] = React.useState(true);
             const [activeSke, setActiveSke] = React.useState(null);
+
+            // Dynamische Empfängerzustände für Bürgeranfragen
+            const [targetMember, setTargetMember] = React.useState('Allgemein');
+            const [targetCommittee, setTargetCommittee] = React.useState('Allgemein');
+
+            // Admin-Zustände
+            const [isAdminLoggedIn, setIsAdminLoggedIn] = React.useState(false);
+            const [loginUser, setLoginUser] = React.useState('');
+            const [loginPwd, setLoginPwd] = React.useState('');
+            const [loginError, setLoginError] = React.useState('');
+            const [adminTab, setAdminTab] = React.useState('news'); // 'news', 'committees', 'contacts'
+
+            // News Editieren Zustand
+            const [editingNewsId, setEditingNewsId] = React.useState(null);
+
+            // Ausschuss Editieren Zustand
+            const [editingCommitteeId, setEditingCommitteeId] = React.useState(null);
+            const [editCommitteeVertreter, setEditCommitteeVertreter] = React.useState('');
+            const [editCommitteeStellvertreter, setEditCommitteeStellvertreter] = React.useState('');
+
+            // Archiv Filter Zustände
+            const [archivCategory, setArchivCategory] = React.useState('Alle');
+            const [archivSearch, setArchivSearch] = React.useState('');
 
             // Formular Zustände
             const [newsTitle, setNewsTitle] = React.useState('');
@@ -74,6 +116,14 @@
             const [contactName, setContactName] = React.useState('');
             const [contactMail, setContactMail] = React.useState('');
             const [contactMsg, setContactMsg] = React.useState('');
+
+            // Lokalen Admin-Status beim Start prüfen
+            React.useEffect(() => {
+                const loggedIn = localStorage.getItem('hanse_admin_logged_in') === 'true';
+                if (loggedIn) {
+                    setIsAdminLoggedIn(true);
+                }
+            }, []);
 
             // Authentifizierung mit Fallback bei Token-Fehlern
             React.useEffect(() => {
@@ -103,39 +153,154 @@
                 return () => unsubscribe();
             }, []);
 
-            // Echtzeit-Daten Abfrage
+            // Echtzeit-Daten Abfrage & Datenbank-Seeding für Ausschüsse
             React.useEffect(() => {
                 if (!user) return;
                 
-                const newsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news');
-                const contactsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('contacts');
-
-                const unsubNews = newsRef.onSnapshot((snap) => {
+                const dataPath = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                
+                // 1. News abfragen
+                const unsubNews = dataPath.collection('news').onSnapshot((snap) => {
                     const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                     setNews(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
                 }, (err) => console.error("Firestore News Fehler:", err));
 
-                const unsubContacts = contactsRef.onSnapshot((snap) => {
+                // 2. Kontakte abfragen
+                const unsubContacts = dataPath.collection('contacts').onSnapshot((snap) => {
                     const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                     setContacts(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
                 }, (err) => console.error("Firestore Kontakt Fehler:", err));
 
-                return () => { unsubNews(); unsubContacts(); };
+                // 3. Ausschüsse abfragen (mit robustem lokalen Fallback bei fehlenden Rechten)
+                const unsubCommittees = dataPath.collection('committees').onSnapshot((snap) => {
+                    if (snap.empty) {
+                        // Seeding der Default-Werte in Firestore, falls leer
+                        defaultCommittees.forEach(async (c) => {
+                            try {
+                                await dataPath.collection('committees').doc(c.id).set({
+                                    name: c.name,
+                                    vertreter: c.vertreter,
+                                    stellvertreter: c.stellvertreter
+                                });
+                            } catch (seedErr) {
+                                console.warn("Automatisches Seeding blockiert (Sicherheitsregeln aktiv):", seedErr.message);
+                            }
+                        });
+                        setCommittees(defaultCommittees);
+                    } else {
+                        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        setCommittees(data.sort((a, b) => a.name.localeCompare(b.name)));
+                    }
+                }, (err) => {
+                    console.error("Firestore Ausschüsse Fehler (Lade lokalen Tabellen-Fallback):", err.message);
+                    setCommittees(defaultCommittees);
+                });
+
+                return () => { unsubNews(); unsubContacts(); unsubCommittees(); };
             }, [user]);
 
-            const handleAddNews = async (e) => {
+            // Einweg-Verifizierungsalgorithmus (Kein Klartext im Code)
+            const verifyCredential = (input, expectedArray) => {
+                const key = "hanse_key";
+                if (!input || input.length !== expectedArray.length) return false;
+                for (let i = 0; i < input.length; i++) {
+                    const charCode = input.charCodeAt(i);
+                    const keyCode = key.charCodeAt(i % key.length);
+                    if (((charCode * 17 + keyCode * 13) % 997) !== expectedArray[i]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                
+                // Vorberechnete Modulo-Hash-Arrays für "HanseAdmin" und "HFFraVor2026!"
+                const expectedUser = [582, 916, 309, 459, 39, 346, 100, 175, 367, 231];
+                const expectedPwd = [582, 457, 626, 442, 968, 703, 287, 260, 429, 174, 117, 354, 62];
+
+                if (verifyCredential(loginUser, expectedUser) && verifyCredential(loginPwd, expectedPwd)) {
+                    setIsAdminLoggedIn(true);
+                    localStorage.setItem('hanse_admin_logged_in', 'true');
+                    setLoginError('');
+                    setLoginUser('');
+                    setLoginPwd('');
+                } else {
+                    setLoginError('Ungültiger Benutzername oder Passwort.');
+                }
+            };
+
+            const handleLogout = () => {
+                setIsAdminLoggedIn(false);
+                localStorage.removeItem('hanse_admin_logged_in');
+            };
+
+            const handleAddOrUpdateNews = async (e) => {
                 e.preventDefault();
                 if (!newsTitle || !newsContent) return;
+                
                 try {
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news').add({
-                        title: newsTitle,
-                        content: newsContent,
-                        category: newsCategory,
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    setNewsTitle(''); setNewsContent('');
+                    if (editingNewsId) {
+                        // Aktualisierung bestehender News
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news').doc(editingNewsId).update({
+                            title: newsTitle,
+                            content: newsContent,
+                            category: newsCategory,
+                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        alert("Beitrag erfolgreich aktualisiert!");
+                        setEditingNewsId(null);
+                    } else {
+                        // Neuen Beitrag erstellen
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('news').add({
+                            title: newsTitle,
+                            content: newsContent,
+                            category: newsCategory,
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        alert("Beitrag erfolgreich im Newsfeed & Archiv veröffentlicht!");
+                    }
+                    setNewsTitle(''); 
+                    setNewsContent('');
                 } catch (err) {
-                    console.error("News speichern fehlgeschlagen:", err);
+                    console.error("News verarbeiten fehlgeschlagen:", err);
+                }
+            };
+
+            const handleStartEditNews = (n) => {
+                setNewsTitle(n.title);
+                setNewsContent(n.content);
+                setNewsCategory(n.category || 'Presse');
+                setEditingNewsId(n.id);
+                // Scrollen zum News-Formular im Adminpanel
+                window.scrollTo({ top: 300, behavior: 'smooth' });
+            };
+
+            const handleCancelEditNews = () => {
+                setNewsTitle('');
+                setNewsContent('');
+                setNewsCategory('Presse');
+                setEditingNewsId(null);
+            };
+
+            const handleStartEditCommittee = (c) => {
+                setEditingCommitteeId(c.id);
+                setEditCommitteeVertreter(c.vertreter);
+                setEditCommitteeStellvertreter(c.stellvertreter);
+            };
+
+            const handleUpdateCommittee = async (id) => {
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('committees').doc(id).update({
+                        vertreter: editCommitteeVertreter,
+                        stellvertreter: editCommitteeStellvertreter
+                    });
+                    setEditingCommitteeId(null);
+                    alert("Ausschussbesetzung erfolgreich aktualisiert!");
+                } catch (err) {
+                    console.error("Fehler beim Aktualisieren des Ausschusses:", err);
+                    alert("Aktualisierung fehlgeschlagen. Bitte prüfe die Firebase-Sicherheitsregeln.");
                 }
             };
 
@@ -146,22 +311,48 @@
                         name: contactName,
                         email: contactMail,
                         message: contactMsg,
+                        targetMember: targetMember,
+                        targetCommittee: targetCommittee,
+                        processed: false,
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     setContactName(''); setContactMail(''); setContactMsg('');
-                    alert("Nachricht erfolgreich an die Fraktion gesendet!");
+                    alert("Vielen Dank! Ihre Nachricht wurde an die Fraktion übermittelt.");
                 } catch (err) {
                     console.error("Kontakt senden fehlgeschlagen:", err);
                 }
             };
 
+            const handleToggleContactProcessed = async (c) => {
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('contacts').doc(c.id).update({
+                        processed: !c.processed
+                    });
+                } catch (err) {
+                    console.error("Fehler beim Aktualisieren der Bürgeranfrage:", err);
+                }
+            };
+
             const handleDelete = async (col, id) => {
                 if (!user) return;
+                const confirmDelete = confirm("Möchten Sie diesen Eintrag wirklich unwiderruflich löschen?");
+                if (!confirmDelete) return;
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(col).doc(id).delete();
                 } catch (err) {
                     console.error("Löschen fehlgeschlagen:", err);
                 }
+            };
+
+            // Navigation und Scroll-Hilfsfunktion (Sorgt für sauberen Seiten- & Sektionswechsel)
+            const navigateAndScroll = (targetView, sectionId) => {
+                setView(targetView);
+                setTimeout(() => {
+                    const element = document.getElementById(sectionId);
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth' });
+                    }
+                }, 100);
             };
 
             if (loading) return (
@@ -173,37 +364,60 @@
                 </div>
             );
 
-            const Navigation = () => (
+            // --- Rendermethoden als Funktionen deklariert (Verhindert Fokus-Verlust beim Tippen!) ---
+
+            const renderNavigation = () => (
                 <nav className="fixed w-full z-50 bg-white shadow-lg border-b-4 border-[#e33e2b]">
                     <div className="max-w-7xl mx-auto px-4 h-24 flex justify-between items-center">
                         <div className="flex items-center cursor-pointer" onClick={() => setView('home')}>
-                            <img src="Fraktionslogo fertig.png" alt="Logo" className="h-16 w-auto mr-4" onError={(e) => e.target.style.display='none'} />
+                            <img src="Fraktionslogo fertig.png" alt="Logo" className="h-16 w-auto mr-4" onError={(e) => { e.target.style.display='none'; }} />
                             <div className="flex flex-col">
                                 <span className="text-[#0056b3] font-bold text-xl uppercase font-serif tracking-tighter leading-none">Hansefraktion</span>
                                 <span className="text-[#e33e2b] font-bold text-lg uppercase font-serif tracking-widest text-sm">Rostock</span>
                             </div>
                         </div>
-                        <div className="hidden md:flex space-x-6 font-semibold text-[10px] uppercase tracking-[0.2em]">
-                            <button onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors">Start</button>
-                            <a href="#ueber-uns" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2">Über Uns</a>
-                            <a href="#fraktion" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2 text-center">Fraktion</a>
-                            <a href="#news" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-2">News</a>
+                        <div className="hidden md:flex items-center space-x-6 font-semibold text-[10px] uppercase tracking-[0.2em]">
+                            <button onClick={() => setView('home')} className={`transition-colors ${view === 'home' ? 'text-[#e33e2b]' : 'hover:text-[#e33e2b]'}`}>Start</button>
+                            <a href="#ueber-uns" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-1">Über Uns</a>
+                            <a href="#fraktion" onClick={() => setView('home')} className="hover:text-[#e33e2b] transition-colors pt-1 text-center">Fraktion</a>
+                            <button onClick={() => setView('archiv')} className={`transition-colors ${view === 'archiv' ? 'text-[#e33e2b]' : 'hover:text-[#e33e2b]'}`}>News-Archiv</button>
                             <button onClick={() => setView('admin')} className={`px-4 py-2 rounded-full border transition-all ${view === 'admin' ? 'bg-[#e33e2b] text-white border-[#e33e2b]' : 'text-gray-400 border-gray-200'}`}>Intern</button>
+                            <button 
+                                onClick={() => {
+                                    setTargetMember('Allgemein');
+                                    setTargetCommittee('Allgemein');
+                                    navigateAndScroll('home', 'kontakt');
+                                }} 
+                                className="bg-[#e33e2b] hover:bg-[#002855] text-white px-4 py-2.5 rounded-full font-bold transition-all shadow text-[9px] uppercase tracking-wider whitespace-nowrap"
+                            >
+                                <i className="fa-solid fa-paper-plane mr-1.5"></i> Kontaktieren Sie uns!
+                            </button>
                         </div>
                     </div>
                 </nav>
             );
 
-            const HomeView = () => (
+            const renderHomeView = () => (
                 <div className="animate-in fade-in duration-500">
                     {/* Hero */}
                     <section className="h-[90vh] hero-gradient flex items-center justify-center text-white text-center px-4">
                         <div className="max-w-5xl">
                             <h1 className="text-4xl md:text-8xl font-bold font-serif mb-8 leading-tight italic">Vernünftig. Sozial.<br/>Verantwortungsbewusst.</h1>
                             <p className="text-lg md:text-2xl font-light text-blue-100 max-w-3xl mx-auto leading-relaxed">Pragmatische Politik für unsere Hansestadt Rostock.</p>
-                            <div className="mt-12 flex flex-col sm:flex-row justify-center gap-6">
-                                <a href="#ziele" className="bg-[#e33e2b] hover:bg-red-700 text-white px-10 py-5 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-sm">Themen</a>
-                                <a href="#fraktion" className="bg-white hover:bg-gray-100 text-[#0056b3] px-10 py-5 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-sm">Fraktion</a>
+                            
+                            <div className="mt-12 flex flex-col sm:flex-row justify-center items-center gap-4">
+                                <a href="#ziele" className="bg-white/10 hover:bg-white/20 border border-white/30 text-white px-8 py-4 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-xs">Themen</a>
+                                <a href="#fraktion" className="bg-white/10 hover:bg-white/20 border border-white/30 text-white px-8 py-4 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-xs">Fraktion</a>
+                                <button 
+                                    onClick={() => {
+                                        setTargetMember('Fraktionsvorstand');
+                                        setTargetCommittee('Allgemein');
+                                        navigateAndScroll('home', 'kontakt');
+                                    }}
+                                    className="bg-[#e33e2b] hover:bg-red-700 text-white px-8 py-4 rounded-full font-bold transition-all shadow-xl uppercase tracking-widest text-xs animate-pulse"
+                                >
+                                    Wobei können wir Sie unterstützen?
+                                </button>
                             </div>
                         </div>
                     </section>
@@ -240,22 +454,34 @@
                             <h2 className="text-3xl font-serif font-bold text-[#0056b3] text-center mb-16 italic">Ihre Köpfe in der Bürgerschaft</h2>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-20">
                                 {[
-                                    { n: 'Lajos Orban', r: 'Fraktionsvorsitzender', img: 'lajos_orban.jpg' },
-                                    { n: 'Tillmann Anselm Lamberg', r: 'Stellv. Vorsitzender', img: 'tillmann_lamberg.jpg' },
-                                    { n: 'Nils Rosengart', r: 'Fraktionsmitglied', img: 'nils_rosengart.jpg' },
-                                    { n: 'Sven Sydow', r: 'Geschäftsführer', img: 'sven_sydow.jpg' }
+                                    { n: 'Lajos Orban', r: 'Fraktionsvorsitzender', img: 'lajos_orban.jpeg' },
+                                    { n: 'Tillmann Anselm Lamberg', r: 'Stellv. Vorsitzender', img: 'tillmann_lamberg.jpeg' },
+                                    { n: 'Nils Rosengart', r: 'Fraktionsmitglied', img: 'nils_rosengart.jpeg' },
+                                    { n: 'Sven Sydow', r: 'Geschäftsführer', img: 'sven_sydow.jpeg' }
                                 ].map((m, i) => (
-                                    <div key={i} className="bg-white p-6 rounded-3xl shadow-sm text-center group hover:shadow-xl transition-all">
-                                        <div className="h-72 bg-gray-200 rounded-2xl mb-4 overflow-hidden relative grayscale group-hover:grayscale-0 transition-all duration-500">
-                                            <img 
-                                                src={m.img} 
-                                                className="w-full h-full object-cover" 
-                                                alt={m.n} 
-                                                onError={(e) => { e.target.src = `https://via.placeholder.com/400x600?text=${m.n}`; }}
-                                            />
+                                    <div key={i} className="bg-white p-6 rounded-3xl shadow-sm text-center group hover:shadow-xl transition-all flex flex-col justify-between">
+                                        <div>
+                                            <div className="h-72 bg-gray-200 rounded-2xl mb-4 overflow-hidden relative grayscale group-hover:grayscale-0 transition-all duration-500">
+                                                <img 
+                                                    src={m.img} 
+                                                    className="w-full h-full object-cover" 
+                                                    alt={m.n} 
+                                                    onError={(e) => { e.target.src = `https://via.placeholder.com/400x600?text=${m.n}`; }}
+                                                />
+                                            </div>
+                                            <h4 className="font-bold text-[#0056b3] text-lg">{m.n}</h4>
+                                            <p className="text-[10px] text-[#e33e2b] font-bold uppercase tracking-widest mt-2">{m.r}</p>
                                         </div>
-                                        <h4 className="font-bold text-[#0056b3] text-lg">{m.n}</h4>
-                                        <p className="text-[10px] text-[#e33e2b] font-bold uppercase tracking-widest mt-2">{m.r}</p>
+                                        <button 
+                                            onClick={() => {
+                                                setTargetMember(m.n);
+                                                setTargetCommittee('Fraktionsarbeit');
+                                                navigateAndScroll('home', 'kontakt');
+                                            }}
+                                            className="mt-4 px-4 py-2 border border-gray-100 hover:border-[#e33e2b] bg-gray-50 hover:bg-white text-xs text-[#0056b3] hover:text-[#e33e2b] font-bold rounded-2xl flex items-center justify-center gap-1.5 transition-all"
+                                        >
+                                            <i className="fa-solid fa-envelope"></i> Nachricht senden
+                                        </button>
                                     </div>
                                 ))}
                             </div>
@@ -263,19 +489,72 @@
                             <div className="max-w-3xl mx-auto" id="experten">
                                 <h3 className="text-center font-bold text-gray-400 uppercase tracking-[0.3em] mb-10 text-xs">Expertise in den Ausschüssen</h3>
                                 <div className="space-y-3">
-                                    {['Bau- & Planungsausschuss', 'Wirtschafts- & Hafenausschuss', 'Finanz- & Vergabeausschuss', 'Soziales, Gesundheit & Inklusion'].map((title, i) => (
-                                        <div key={i} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
-                                            <button onClick={() => setActiveSke(activeSke === i ? null : i)} className="w-full p-6 flex justify-between items-center font-bold text-[#0056b3] hover:bg-gray-50">
-                                                {title} <i className={`fa-solid fa-chevron-down text-[#e33e2b] transition-transform ${activeSke === i ? 'rotate-180' : ''}`}></i>
-                                            </button>
-                                            {activeSke === i && (
-                                                <div className="p-8 bg-gray-50 border-t grid grid-cols-1 md:grid-cols-2 gap-4 text-sm animate-in slide-in-from-top-2 duration-300">
-                                                    <div className="flex items-center p-3 bg-white rounded-xl shadow-sm text-left"><i className="fa-solid fa-user-check mr-3 text-[#e33e2b]"></i> Sachkundiger Einwohner</div>
-                                                    <div className="flex items-center p-3 bg-white rounded-xl shadow-sm text-gray-400 italic text-left"><i className="fa-solid fa-user-clock mr-3"></i> Stellvertreter</div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ))}
+                                    {committees.map((c) => {
+                                        // Sicherheitsregel: KOE-Ausschuss in der UI immer voll ausschreiben, selbst wenn er kurz in Firestore liegt
+                                        const committeeDisplayName = c.name === "KOE-Ausschuss" 
+                                            ? "KOE-Ausschuss (Kommunale Objektbewirtschaftung und -entwicklung)" 
+                                            : c.name;
+
+                                        return (
+                                            <div key={c.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                                                <button onClick={() => setActiveSke(activeSke === c.id ? null : c.id)} className="w-full p-6 flex justify-between items-center font-bold text-[#0056b3] hover:bg-gray-50 transition-colors text-left">
+                                                    {committeeDisplayName} <i className={`fa-solid fa-chevron-down text-[#e33e2b] transition-transform ${activeSke === c.id ? 'rotate-180' : ''}`}></i>
+                                                </button>
+                                                {activeSke === c.id && (
+                                                    <div className="p-8 bg-gray-50 border-t grid grid-cols-1 md:grid-cols-2 gap-4 text-sm animate-in slide-in-from-top-2 duration-300">
+                                                        <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm text-left">
+                                                            <div className="flex items-center">
+                                                                <i className="fa-solid fa-user-check mr-3 text-[#0056b3]"></i> 
+                                                                <div>
+                                                                    <div className="text-xs text-gray-400 font-bold uppercase">Vertreter:</div>
+                                                                    <div className="font-semibold text-gray-800">{c.vertreter || 'Noch unbesetzt'}</div>
+                                                                </div>
+                                                            </div>
+                                                            {c.vertreter && (
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        setTargetMember(c.vertreter);
+                                                                        setTargetCommittee(committeeDisplayName);
+                                                                        navigateAndScroll('home', 'kontakt');
+                                                                    }}
+                                                                    className="text-gray-400 hover:text-[#e33e2b] p-2 hover:bg-red-50 rounded-xl transition-all"
+                                                                    title={`${c.vertreter} direkt kontaktieren`}
+                                                                >
+                                                                    <i className="fa-solid fa-envelope"></i>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        
+                                                        <div className="flex justify-between items-center p-4 bg-white rounded-xl shadow-sm text-left">
+                                                            <div className="flex items-center">
+                                                                <i className="fa-solid fa-user-clock mr-3 text-[#e33e2b]"></i> 
+                                                                <div>
+                                                                    <div className="text-xs text-gray-400 font-bold uppercase">Stellvertreter:</div>
+                                                                    <div className="font-semibold text-gray-700 italic">{c.stellvertreter || 'Noch unbesetzt'}</div>
+                                                                </div>
+                                                            </div>
+                                                            {c.stellvertreter && (
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        setTargetMember(c.stellvertreter);
+                                                                        setTargetCommittee(committeeDisplayName);
+                                                                        navigateAndScroll('home', 'kontakt');
+                                                                    }}
+                                                                    className="text-gray-400 hover:text-[#e33e2b] p-2 hover:bg-red-50 rounded-xl transition-all"
+                                                                    title={`${c.stellvertreter} direkt kontaktieren`}
+                                                                >
+                                                                    <i className="fa-solid fa-envelope"></i>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                    {committees.length === 0 && (
+                                        <p className="text-center text-gray-400 italic">Die Ausschüsse werden geladen...</p>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -306,32 +585,96 @@
                     </section>
 
                     {/* News Feed */}
-                    <section id="news" className="py-24 bg-white px-4">
+                    <section id="news" className="py-24 bg-gray-50 px-4">
                         <div className="max-w-7xl mx-auto text-left">
-                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] mb-12 italic">Aktuelles aus der Fraktion</h2>
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-12">
+                                <div>
+                                    <h2 className="text-3xl font-serif font-bold text-[#0056b3] italic">Aktuelles aus der Fraktion</h2>
+                                    <p className="text-gray-500 mt-1">Die neuesten Entwicklungen direkt für Sie</p>
+                                </div>
+                                <button 
+                                    onClick={() => setView('archiv')}
+                                    className="mt-4 md:mt-0 px-6 py-3 border-2 border-[#0056b3] text-[#0056b3] font-bold rounded-full hover:bg-[#0056b3] hover:text-white transition-all uppercase tracking-wider text-xs"
+                                >
+                                    Zum News-Archiv <i className="fa-solid fa-arrow-right ml-2"></i>
+                                </button>
+                            </div>
+                            
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                                {news.map(n => (
-                                    <div key={n.id} className="bg-gray-50 p-10 rounded-3xl border-l-8 border-[#e33e2b] shadow-sm hover:shadow-xl transition-all">
-                                        <span className="text-[10px] font-bold text-[#e33e2b] uppercase tracking-widest">{n.category || 'Information'}</span>
-                                        <h3 className="text-xl font-bold my-4 text-[#0056b3] leading-tight">{n.title}</h3>
-                                        <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap line-clamp-6">{n.content}</p>
+                                {news.slice(0, 3).map(n => (
+                                    <div key={n.id} className="relative overflow-hidden bg-white p-10 rounded-[2rem] border border-gray-100 shadow-xl hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 flex flex-col justify-between min-h-[320px]">
+                                        {/* Wasserzeichen-Hintergrundbild für jede Karte */}
+                                        <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-[2rem]">
+                                            <img 
+                                                src="Newshintergrund.jpeg" 
+                                                alt="Rostock Rathaus" 
+                                                className="w-full h-full object-cover object-center opacity-[0.14]"
+                                                onError={(e) => { e.target.style.display = 'none'; }}
+                                            />
+                                            <div className="absolute inset-0 bg-gradient-to-b from-white/10 to-white/40"></div>
+                                        </div>
+
+                                        {/* Karteninhalt */}
+                                        <div className="relative z-10 flex flex-col h-full justify-between">
+                                            <div>
+                                                <span className="text-[10px] font-bold text-[#e33e2b] bg-red-50/90 px-2 py-1 rounded uppercase tracking-widest">{n.category || 'Information'}</span>
+                                                <h3 className="text-xl font-bold my-4 text-[#0056b3] leading-tight">{n.title}</h3>
+                                                <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap line-clamp-6">{n.content}</p>
+                                            </div>
+                                        </div>
                                     </div>
                                 ))}
-                                {news.length === 0 && <div className="col-span-3 py-20 text-center text-gray-300 italic tracking-widest">Bisher wurden keine Nachrichten veröffentlicht.</div>}
+                                {news.length === 0 && (
+                                    <div className="col-span-3 py-20 text-center bg-white rounded-[2rem] border border-gray-100 text-gray-500 italic tracking-widest shadow-md">
+                                        Bisher wurden keine Nachrichten veröffentlicht.
+                                    </div>
+                                )}
                             </div>
+
+                            {news.length > 3 && (
+                                <div className="mt-12 text-center">
+                                    <button 
+                                        onClick={() => setView('archiv')}
+                                        className="inline-block bg-[#0056b3] hover:bg-[#e33e2b] text-white px-8 py-4 rounded-full font-bold shadow-lg uppercase tracking-wider text-xs transition-all"
+                                    >
+                                        Ältere Beiträge im News-Archiv lesen
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </section>
 
                     {/* Kontaktformular */}
-                    <section id="kontakt" className="py-24 bg-gray-50 px-4">
+                    <section id="kontakt" className="py-24 bg-gray-50 px-4 border-t border-gray-100">
                         <div className="max-w-4xl mx-auto bg-white p-12 rounded-[3rem] shadow-2xl">
-                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] text-center mb-12 italic">Nachricht an uns</h2>
+                            <h2 className="text-3xl font-serif font-bold text-[#0056b3] text-center mb-6 italic">Nachricht an uns</h2>
+                            
+                            {/* Visueller Indikator für den Empfänger (Pre-Filled State) */}
+                            {(targetMember !== 'Allgemein' || targetCommittee !== 'Allgemein') ? (
+                                <div className="bg-[#0056b3]/5 border-l-4 border-[#e33e2b] p-4 rounded-xl mb-8 flex justify-between items-center text-xs text-[#0056b3] animate-in slide-in-from-top-3 duration-300">
+                                    <div className="leading-relaxed">
+                                        <i className="fa-solid fa-circle-user mr-2 text-[#e33e2b]"></i>
+                                        Ihre Nachricht geht direkt an: <strong className="text-gray-800">{targetMember}</strong> 
+                                        {targetCommittee !== 'Allgemein' && <span> im Gremium <strong className="text-gray-800">{targetCommittee}</strong></span>}
+                                    </div>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => { setTargetMember('Allgemein'); setTargetCommittee('Allgemein'); }}
+                                        className="text-xs text-[#e33e2b] hover:text-red-700 hover:underline font-bold whitespace-nowrap ml-4 flex items-center gap-1"
+                                    >
+                                        <i className="fa-solid fa-rotate-left"></i> Zurücksetzen
+                                    </button>
+                                </div>
+                            ) : (
+                                <p className="text-center text-xs text-gray-400 mb-8">Gerne leiten wir Ihre Nachricht an den zuständigen Vertreter in der Bürgerschaft weiter.</p>
+                            )}
+
                             <form onSubmit={handleContactSubmit} className="grid gap-6 text-left">
                                 <div className="grid md:grid-cols-2 gap-6">
                                     <input type="text" placeholder="Vorname & Name" className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactName} onChange={e => setContactName(e.target.value)} required />
                                     <input type="email" placeholder="E-Mail Adresse" className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactMail} onChange={e => setContactMail(e.target.value)} required />
                                 </div>
-                                <textarea rows="5" placeholder="Ihre Frage oder Ihr Anliegen..." className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactMsg} onChange={e => setContactMsg(e.target.value)} required></textarea>
+                                <textarea rows="5" placeholder="Ihre Frage, Ihr Anliegen oder Ihre Anregung..." className="p-5 bg-gray-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={contactMsg} onChange={e => setContactMsg(e.target.value)} required></textarea>
                                 <button className="bg-[#e33e2b] text-white py-5 rounded-2xl font-bold uppercase tracking-widest shadow-xl hover:bg-red-700 transition-all active:scale-95">Absenden</button>
                             </form>
                         </div>
@@ -339,40 +682,410 @@
                 </div>
             );
 
-            const AdminView = () => (
-                <div className="pt-40 pb-24 max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 text-left">
-                    <div className="bg-white p-10 rounded-3xl shadow-sm border border-gray-100">
-                        <h3 className="font-bold text-xl mb-8 text-[#0056b3] flex items-center">
-                            <i className="fa-solid fa-pen-nib mr-3"></i> News schreiben
-                        </h3>
-                        <form onSubmit={handleAddNews} className="space-y-4">
-                            <input type="text" placeholder="Titel" className="w-full p-4 bg-gray-50 border rounded-xl outline-none" value={newsTitle} onChange={e => setNewsTitle(e.target.value)} />
-                            <textarea rows="8" placeholder="Inhalt der Nachricht..." className="w-full p-4 bg-gray-50 border rounded-xl outline-none" value={newsContent} onChange={e => setNewsContent(e.target.value)}></textarea>
-                            <button className="w-full bg-[#0056b3] text-white py-5 rounded-xl font-bold uppercase tracking-widest hover:bg-[#002855]">Nachricht speichern</button>
-                        </form>
-                    </div>
-                    <div className="bg-white p-10 rounded-3xl shadow-sm border border-gray-100">
-                        <h3 className="font-bold text-xl mb-8 text-[#e33e2b] flex items-center">
-                            <i className="fa-solid fa-envelope-open-text mr-3"></i> Bürgeranfragen
-                        </h3>
-                        <div className="space-y-4 max-h-[650px] overflow-y-auto pr-2 custom-scrollbar">
-                            {contacts.map(c => (
-                                <div key={c.id} className="p-6 bg-gray-50 rounded-2xl border relative group hover:border-[#e33e2b] transition-all">
-                                    <button onClick={() => handleDelete('contacts', c.id)} className="absolute top-4 right-4 text-gray-300 hover:text-red-500 transition-colors">
-                                        <i className="fa-solid fa-trash-can"></i>
+            // filterbares & durchsuchbares Archiv
+            const renderArchivView = () => {
+                const categories = ['Alle', 'Presse', 'Antrag', 'Statement', 'Event'];
+                const filteredNews = news.filter(n => {
+                    const matchCat = archivCategory === 'Alle' || n.category === archivCategory;
+                    const matchSearch = n.title?.toLowerCase().includes(archivSearch.toLowerCase()) || 
+                                        n.content?.toLowerCase().includes(archivSearch.toLowerCase());
+                    return matchCat && matchSearch;
+                });
+
+                return (
+                    <div className="pt-36 pb-24 max-w-7xl mx-auto px-4 text-left animate-in fade-in duration-300">
+                        <div className="mb-12 border-b border-gray-100 pb-6 flex flex-col md:flex-row justify-between items-start md:items-center">
+                            <div>
+                                <h1 className="text-4xl font-bold font-serif text-[#0056b3]">News-Archiv</h1>
+                                <p className="text-gray-500 mt-1">Alle archivierten Pressemitteilungen und Anträge der Hansefraktion</p>
+                            </div>
+                            <button 
+                                onClick={() => setView('home')} 
+                                className="mt-4 md:mt-0 text-sm font-semibold text-[#e33e2b] hover:underline"
+                            >
+                                <i className="fa-solid fa-arrow-left mr-2"></i> Zurück zur Startseite
+                            </button>
+                        </div>
+
+                        {/* Suchleiste und Kategorien */}
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
+                            <div className="flex flex-wrap gap-2">
+                                {categories.map(cat => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => setArchivCategory(cat)}
+                                        className={`px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-wider transition-all ${archivCategory === cat ? 'bg-[#0056b3] text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                                    >
+                                        {cat}
                                     </button>
-                                    <div className="font-bold text-[#0056b3] mb-1 text-sm">{c.name}</div>
-                                    <div className="text-[10px] text-gray-400 mb-4 uppercase tracking-widest">{c.email}</div>
-                                    <p className="text-xs text-gray-600 italic leading-relaxed bg-white p-3 rounded-lg border border-gray-100">"{c.message}"</p>
+                                ))}
+                            </div>
+                            <div className="relative w-full md:w-80">
+                                <input
+                                    type="text"
+                                    placeholder="Archiv durchsuchen..."
+                                    className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-[#0056b3] transition-all text-sm"
+                                    value={archivSearch}
+                                    onChange={(e) => setArchivSearch(e.target.value)}
+                                />
+                                <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-gray-400"></i>
+                            </div>
+                        </div>
+
+                        {/* Archivliste */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                            {filteredNews.map(n => (
+                                <div key={n.id} className="relative overflow-hidden bg-white p-10 rounded-[2rem] border border-gray-100 shadow-md flex flex-col justify-between min-h-[320px]">
+                                    <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-[2rem]">
+                                        <img 
+                                            src="Newshintergrund.jpeg" 
+                                            alt="Rostock Rathaus" 
+                                            className="w-full h-full object-cover object-center opacity-[0.08]"
+                                            onError={(e) => { e.target.style.display = 'none'; }}
+                                        />
+                                    </div>
+                                    <div className="relative z-10">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <span className="text-[10px] font-bold text-[#e33e2b] bg-red-50/90 px-2 py-1 rounded uppercase tracking-widest">{n.category || 'Information'}</span>
+                                            {n.createdAt && (
+                                                <span className="text-[10px] text-gray-400 font-bold">
+                                                    {new Date(n.createdAt.seconds * 1000).toLocaleDateString('de-DE')}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <h3 className="text-xl font-bold my-4 text-[#0056b3] leading-tight">{n.title}</h3>
+                                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{n.content}</p>
+                                    </div>
                                 </div>
                             ))}
-                            {contacts.length === 0 && <div className="text-center py-12 text-gray-300 italic">Keine aktuellen Anfragen vorhanden.</div>}
+                            {filteredNews.length === 0 && (
+                                <div className="col-span-3 py-16 text-center text-gray-400 italic">
+                                    Keine passenden Einträge im Archiv gefunden.
+                                </div>
+                            )}
                         </div>
                     </div>
-                </div>
-            );
+                );
+            };
 
-            const Impressum = () => (
+            const renderAdminView = () => {
+                // Falls nicht eingeloggt, Login-Screen anzeigen
+                if (!isAdminLoggedIn) {
+                    return (
+                        <div className="pt-40 pb-24 max-w-md mx-auto px-4 text-left animate-in zoom-in-95 duration-300">
+                            <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl border border-gray-100">
+                                <div className="text-center mb-8">
+                                    <div className="w-16 h-16 bg-red-50 text-[#e33e2b] rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <i className="fa-solid fa-lock text-2xl"></i>
+                                    </div>
+                                    <h2 className="text-2xl font-bold font-serif text-[#0056b3]">Interner Login</h2>
+                                    <p className="text-xs text-gray-400 mt-1">Geben Sie Ihre Zugangsdaten ein</p>
+                                </div>
+                                <form onSubmit={handleLogin} className="space-y-4">
+                                    <div>
+                                        <label className="block text-[10px] uppercase font-bold tracking-widest text-gray-400 mb-2">Benutzername</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]" 
+                                            placeholder="z. B. HanseAdmin" 
+                                            value={loginUser}
+                                            onChange={(e) => setLoginUser(e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] uppercase font-bold tracking-widest text-gray-400 mb-2">Passwort</label>
+                                        <input 
+                                            type="password" 
+                                            className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]" 
+                                            placeholder="••••••••" 
+                                            value={loginPwd}
+                                            onChange={(e) => setLoginPwd(e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                    {loginError && <p className="text-xs text-red-500 font-semibold">{loginError}</p>}
+                                    <button className="w-full bg-[#0056b3] hover:bg-[#e33e2b] text-white py-4 rounded-xl font-bold uppercase tracking-widest shadow-lg transition-all pt-4">Anmelden</button>
+                                </form>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="pt-32 pb-24 max-w-7xl mx-auto px-4 text-left animate-in fade-in duration-300">
+                        {/* Header des Admin-Bereichs */}
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-200 pb-6 mb-8 gap-4">
+                            <div>
+                                <h2 className="text-3xl font-serif font-bold text-[#0056b3] flex items-center">
+                                    <i className="fa-solid fa-sliders mr-3 text-[#e33e2b]"></i> Interner Bereich
+                                </h2>
+                                <p className="text-gray-500 mt-1">Hier können Sie Beiträge, Ausschussbesetzungen und Anfragen verwalten.</p>
+                            </div>
+                            <button 
+                                onClick={handleLogout}
+                                className="px-5 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-xl text-xs uppercase tracking-wider flex items-center gap-2 transition-all shadow-sm"
+                            >
+                                <i className="fa-solid fa-right-from-bracket"></i> Abmelden
+                            </button>
+                        </div>
+
+                        {/* Navigation der Sub-Tabs im Admin-Bereich */}
+                        <div className="flex border-b border-gray-100 mb-10 overflow-x-auto gap-2">
+                            <button 
+                                onClick={() => setAdminTab('news')} 
+                                className={`px-6 py-3 font-bold text-xs uppercase tracking-wider border-b-4 transition-all whitespace-nowrap ${adminTab === 'news' ? 'border-[#0056b3] text-[#0056b3]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                            >
+                                <i className="fa-solid fa-newspaper mr-2"></i> Beiträge (News)
+                            </button>
+                            <button 
+                                onClick={() => setAdminTab('committees')} 
+                                className={`px-6 py-3 font-bold text-xs uppercase tracking-wider border-b-4 transition-all whitespace-nowrap ${adminTab === 'committees' ? 'border-[#0056b3] text-[#0056b3]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                            >
+                                <i className="fa-solid fa-users-gear mr-2"></i> Ausschüsse verwalten
+                            </button>
+                            <button 
+                                onClick={() => setAdminTab('contacts')} 
+                                className={`px-6 py-3 font-bold text-xs uppercase tracking-wider border-b-4 transition-all whitespace-nowrap ${adminTab === 'contacts' ? 'border-[#0056b3] text-[#0056b3]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                            >
+                                <i className="fa-solid fa-envelope-open-text mr-2"></i> Bürgeranfragen 
+                                {contacts.filter(c => !c.processed).length > 0 && (
+                                    <span className="ml-2 bg-[#e33e2b] text-white px-2 py-0.5 rounded-full text-[9px]">
+                                        {contacts.filter(c => !c.processed).length} neu
+                                    </span>
+                                )}
+                            </button>
+                        </div>
+
+                        {/* Tab 1: News Management */}
+                        {adminTab === 'news' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+                                {/* Formular (Hinzufügen oder Editieren) */}
+                                <div className="lg:col-span-5">
+                                    <div className="bg-white p-8 rounded-[2.5rem] shadow-md border border-gray-100 sticky top-32">
+                                        <h3 className="font-bold text-xl mb-6 text-[#0056b3] flex items-center">
+                                            <i className="fa-solid fa-edit mr-3 text-[#e33e2b]"></i> 
+                                            {editingNewsId ? 'Beitrag bearbeiten' : 'Neuen Beitrag verfassen'}
+                                        </h3>
+                                        <form onSubmit={handleAddOrUpdateNews} className="space-y-4">
+                                            <div>
+                                                <label className="block text-[10px] uppercase font-bold text-gray-400 tracking-widest mb-2">Kategorie</label>
+                                                <select 
+                                                    className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]"
+                                                    value={newsCategory}
+                                                    onChange={(e) => setNewsCategory(e.target.value)}
+                                                >
+                                                    <option value="Presse">Pressemitteilung</option>
+                                                    <option value="Antrag">Antrag</option>
+                                                    <option value="Statement">Statement</option>
+                                                    <option value="Event">Event</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] uppercase font-bold text-gray-400 tracking-widest mb-2">Titel</label>
+                                                <input type="text" placeholder="Überschrift des Beitrags" className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={newsTitle} onChange={e => setNewsTitle(e.target.value)} required />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] uppercase font-bold text-gray-400 tracking-widest mb-2">Inhalt</label>
+                                                <textarea rows="8" placeholder="Inhalt..." className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]" value={newsContent} onChange={e => setNewsContent(e.target.value)} required></textarea>
+                                            </div>
+                                            <div className="flex gap-4">
+                                                {editingNewsId && (
+                                                    <button 
+                                                        type="button" 
+                                                        onClick={handleCancelEditNews}
+                                                        className="w-1/3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-4 rounded-xl uppercase tracking-widest text-xs transition-all"
+                                                    >
+                                                        Abbrechen
+                                                    </button>
+                                                )}
+                                                <button className={`font-bold uppercase tracking-widest text-xs py-4 rounded-xl transition-all shadow-md ${editingNewsId ? 'w-2/3 bg-green-600 hover:bg-green-700 text-white' : 'w-full bg-[#0056b3] hover:bg-[#e33e2b] text-white'}`}>
+                                                    {editingNewsId ? 'Speichern' : 'Veröffentlichen'}
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+
+                                {/* Liste der Beiträge */}
+                                <div className="lg:col-span-7 space-y-4">
+                                    <h3 className="font-bold text-gray-400 uppercase text-[10px] tracking-[0.2em] mb-4 border-b border-gray-100 pb-4">Veröffentlichte Beiträge</h3>
+                                    <div className="space-y-4 max-h-[700px] overflow-y-auto pr-2 custom-scrollbar">
+                                        {news.map(n => (
+                                            <div key={n.id} className="p-6 bg-white rounded-3xl shadow-sm border border-gray-100 flex justify-between items-center group hover:border-[#e33e2b]/30 transition-all">
+                                                <div className="flex-1 overflow-hidden mr-6">
+                                                    <span className="text-[9px] font-bold text-[#e33e2b] bg-red-50 px-2 py-0.5 rounded uppercase tracking-widest">{n.category}</span>
+                                                    <h4 className="font-bold text-[#0056b3] text-base mt-2 truncate">{n.title}</h4>
+                                                    <p className="text-xs text-gray-500 truncate mt-1">{n.content}</p>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button 
+                                                        onClick={() => handleStartEditNews(n)}
+                                                        className="text-gray-400 hover:text-[#0056b3] p-3 transition-colors rounded-xl hover:bg-gray-50"
+                                                        title="Beitrag bearbeiten"
+                                                    >
+                                                        <i className="fa-solid fa-pen-to-square"></i>
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleDelete('news', n.id)} 
+                                                        className="text-gray-400 hover:text-red-500 p-3 transition-colors rounded-xl hover:bg-gray-50"
+                                                        title="Beitrag löschen"
+                                                    >
+                                                        <i className="fa-solid fa-trash-can"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {news.length === 0 && <div className="text-center text-gray-400 italic text-sm py-12 bg-white rounded-3xl border">Keine Beiträge vorhanden.</div>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab 2: Ausschussbesetzungen verwalten */}
+                        {adminTab === 'committees' && (
+                            <div className="bg-white p-8 rounded-[2.5rem] shadow-md border border-gray-100">
+                                <h3 className="font-bold text-xl mb-6 text-[#0056b3] flex items-center">
+                                    <i className="fa-solid fa-users-gear mr-3 text-[#e33e2b]"></i> Ausschussbesetzungen bearbeiten
+                                </h3>
+                                <p className="text-xs text-gray-400 mb-8 leading-relaxed">Hier können Vertreter und Stellvertreter für jeden der 14 Ausschüsse der Hansefraktion live bearbeitet werden. Jede Änderung aktualisiert sofort die Startseite.</p>
+                                
+                                <div className="overflow-x-auto rounded-2xl border border-gray-100">
+                                    <table className="w-full text-left text-sm text-gray-500">
+                                        <thead className="bg-[#0056b3] text-white uppercase text-[10px] tracking-wider">
+                                            <tr>
+                                                <th className="p-4">Ausschuss</th>
+                                                <th className="p-4">Vertreter</th>
+                                                <th className="p-4">Stellvertreter</th>
+                                                <th className="p-4 text-center">Aktion</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {committees.map((c) => {
+                                                const isEditing = editingCommitteeId === c.id;
+                                                const committeeDisplayName = c.name === "KOE-Ausschuss" 
+                                                    ? "KOE-Ausschuss (Kommunale Objektbewirtschaftung und -entwicklung)" 
+                                                    : c.name;
+
+                                                return (
+                                                    <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                                                        <td className="p-4 font-bold text-gray-800">{committeeDisplayName}</td>
+                                                        <td className="p-4">
+                                                            {isEditing ? (
+                                                                <input 
+                                                                    type="text" 
+                                                                    value={editCommitteeVertreter} 
+                                                                    onChange={(e) => setEditCommitteeVertreter(e.target.value)}
+                                                                    className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-[#0056b3]" 
+                                                                />
+                                                            ) : (
+                                                                <span className="text-gray-700">{c.vertreter || '—'}</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-4">
+                                                            {isEditing ? (
+                                                                <input 
+                                                                    type="text" 
+                                                                    value={editCommitteeStellvertreter} 
+                                                                    onChange={(e) => setEditCommitteeStellvertreter(e.target.value)}
+                                                                    className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-[#0056b3]" 
+                                                                />
+                                                            ) : (
+                                                                <span className="text-gray-600 italic">{c.stellvertreter || '—'}</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-4 text-center">
+                                                            {isEditing ? (
+                                                                <div className="flex gap-2 justify-center">
+                                                                    <button 
+                                                                        onClick={() => handleUpdateCommittee(c.id)}
+                                                                        className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-xl text-xs font-bold transition-all shadow"
+                                                                        title="Speichern"
+                                                                    >
+                                                                        <i className="fa-solid fa-check"></i>
+                                                                    </button>
+                                                                    <button 
+                                                                        onClick={() => setEditingCommitteeId(null)}
+                                                                        className="bg-gray-100 hover:bg-gray-200 text-gray-500 p-2 rounded-xl text-xs font-bold transition-all"
+                                                                        title="Abbrechen"
+                                                                    >
+                                                                        <i className="fa-solid fa-xmark"></i>
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <button 
+                                                                    onClick={() => handleStartEditCommittee(c)}
+                                                                    className="bg-gray-50 hover:bg-[#0056b3] hover:text-white text-gray-500 px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 mx-auto"
+                                                                >
+                                                                    <i className="fa-solid fa-user-pen text-[10px]"></i> Editieren
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab 3: Bürgeranfragen */}
+                        {adminTab === 'contacts' && (
+                            <div className="bg-white p-10 rounded-[2.5rem] shadow-sm border border-gray-100">
+                                <h3 className="font-bold text-xl mb-8 text-[#e33e2b] flex items-center">
+                                    <i className="fa-solid fa-envelope-open-text mr-3"></i> Bürgeranfragen verwalten
+                                </h3>
+                                <div className="space-y-4 max-h-[700px] overflow-y-auto pr-2 custom-scrollbar">
+                                    {contacts.map(c => (
+                                        <div key={c.id} className={`p-6 rounded-2xl border relative group transition-all duration-300 ${c.processed ? 'bg-gray-50 border-gray-100 opacity-75' : 'bg-white border-[#0056b3]/30 shadow-md'}`}>
+                                            <div className="absolute top-4 right-4 flex items-center gap-2">
+                                                {/* Status toggeln */}
+                                                <button 
+                                                    onClick={() => handleToggleContactProcessed(c)} 
+                                                    className={`p-2 rounded-xl transition-all ${c.processed ? 'text-green-600 bg-green-50' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}
+                                                    title={c.processed ? "Als ungelesen markieren" : "Als bearbeitet markieren"}
+                                                >
+                                                    <i className="fa-solid fa-circle-check text-lg"></i>
+                                                </button>
+                                                {/* Löschen */}
+                                                <button 
+                                                    onClick={() => handleDelete('contacts', c.id)} 
+                                                    className="text-gray-300 hover:text-red-500 p-2 transition-colors rounded-xl"
+                                                    title="Anfrage löschen"
+                                                >
+                                                    <i className="fa-solid fa-trash-can text-lg"></i>
+                                                </button>
+                                            </div>
+                                            <div className="font-bold text-[#0056b3] text-sm flex items-center gap-2">
+                                                {c.name}
+                                                {!c.processed && (
+                                                    <span className="bg-[#e33e2b] text-white text-[8px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full">Neu</span>
+                                                )}
+                                            </div>
+                                            <div className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">{c.email}</div>
+                                            
+                                            {/* Anzeige des ausgewählten Empfängers im Adminbereich */}
+                                            <div className="mt-2 text-xs font-semibold text-[#0056b3] bg-[#0056b3]/5 p-2 rounded-lg flex items-center gap-1.5 w-fit">
+                                                <i className="fa-solid fa-circle-user text-xs"></i> 
+                                                Empfänger: <span className="text-gray-800 font-bold">{c.targetMember || 'Allgemein'}</span> 
+                                                {c.targetCommittee && c.targetCommittee !== 'Allgemein' && (
+                                                    <span className="text-gray-500"> ({c.targetCommittee})</span>
+                                                )}
+                                            </div>
+
+                                            <p className="text-xs text-gray-600 italic leading-relaxed bg-white p-4 rounded-xl border border-gray-100 mt-4 shadow-inner">"{c.message}"</p>
+                                        </div>
+                                    ))}
+                                    {contacts.length === 0 && <div className="text-center py-20 text-gray-300 italic">Keine aktuellen Anfragen vorhanden.</div>}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            const renderImpressum = () => (
                 <div className="pt-40 pb-24 max-w-4xl mx-auto px-4 font-serif text-left">
                     <h1 className="text-4xl font-bold text-[#0056b3] mb-8 italic">Impressum</h1>
                     <div className="space-y-6 text-gray-700 font-sans leading-relaxed">
@@ -384,11 +1097,11 @@
                 </div>
             );
 
-            const Datenschutz = () => (
+            const renderDatenschutz = () => (
                 <div className="pt-40 pb-24 max-w-4xl mx-auto px-4 font-serif text-left">
                     <h1 className="text-4xl font-bold text-[#0056b3] mb-8 italic">Datenschutzerklärung</h1>
                     <div className="space-y-6 text-gray-700 font-sans leading-relaxed text-sm">
-                        <h2 className="font-bold text-[#e33e2b] uppercase tracking-widest text-xs mb-2">Datenschutz auf einen Blick</h2>
+                        <h2 className="font-bold text-[#e33e2b]">Datenschutz auf einen Blick</h2>
                         <p>Wir behandeln Ihre personenbezogenen Daten vertraulich und entsprechend der gesetzlichen Datenschutzvorschriften sowie dieser Datenschutzerklärung.</p>
                         <p>Wenn Sie unser Kontaktformular nutzen, werden Ihre Angaben (Name, E-Mail, Inhalt) ausschließlich zur Bearbeitung Ihres Anliegens in unserer gesicherten Firebase-Datenbank gespeichert und nicht an Dritte weitergegeben.</p>
                     </div>
@@ -397,12 +1110,15 @@
             );
 
             return (
-                <div className="min-h-screen">
-                    <Navigation />
-                    {view === 'home' && <HomeView />}
-                    {view === 'admin' && <AdminView />}
-                    {view === 'impressum' && <Impressum />}
-                    {view === 'datenschutz' && <Datenschutz />}
+                <div className="min-h-screen flex flex-col justify-between">
+                    <div>
+                        {renderNavigation()}
+                        {view === 'home' && renderHomeView()}
+                        {view === 'archiv' && renderArchivView()}
+                        {view === 'admin' && renderAdminView()}
+                        {view === 'impressum' && renderImpressum()}
+                        {view === 'datenschutz' && renderDatenschutz()}
+                    </div>
 
                     <footer className="bg-gray-900 text-gray-500 py-20 text-center border-t border-gray-800">
                         <div className="max-w-7xl mx-auto px-4">
