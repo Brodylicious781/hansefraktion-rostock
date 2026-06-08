@@ -216,7 +216,7 @@
             const handleLogin = (e) => {
                 e.preventDefault();
                 
-                // Vorberechnete Modulo-Hash-Arrays für "HanseAdmin" und "HFFraVor2026!"
+                // Vorberechnete Modulo-Hash-Arrays für "Benutzername" und "Passwort"
                 const expectedUser = [582, 916, 309, 459, 39, 346, 100, 175, 367, 231];
                 const expectedPwd = [582, 457, 626, 442, 968, 703, 287, 260, 429, 174, 117, 354, 62];
 
@@ -787,7 +787,7 @@
                                         <input 
                                             type="text" 
                                             className="w-full p-4 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-[#0056b3]" 
-                                            placeholder="z. B. HanseAdmin" 
+                                            placeholder="z. B. FraktionsVorsitzender" 
                                             value={loginUser}
                                             onChange={(e) => setLoginUser(e.target.value)}
                                             required
